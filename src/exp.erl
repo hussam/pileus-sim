@@ -9,36 +9,36 @@
 -define(NUM_COLUMNS, 12).
 
 
-readpct(RunTime, NumServers, NumClients, Policy, ExpName) ->
+readpct(NumServers, NumClients, NumReads, Policy, ExpName) ->
    Results = pmap(
       fun(ReadPct) ->
-            run_exp({RunTime, NumServers, NumClients, ReadPct, Policy})
+            run_exp({NumServers, NumClients, ReadPct, NumReads, Policy})
       end,
-      lists:seq(5, 100, 5)
+      [5]% lists:seq(5, 100, 5)
    ),
    write_results(Results, ExpName).
 
-readpct(RunTime, NumServers, NumClients, Policy, ExpName, NumRuns) ->
+readpct(NumServers, NumClients, NumReads, Policy, ExpName, NumRuns) ->
    Results = multi_run_exp(
-      [{RunTime, NumServers, NumClients, R, Policy} || R <- lists:seq(5,100,5)],
+      [{NumServers, NumClients, R, NumReads, Policy} || R <- lists:seq(5,100,5)],
       NumRuns
    ),
    write_results(Results, ExpName ++ "_" ++ integer_to_list(NumRuns)).
 
 
 
-scale_clients(RunTime, NumServers, ReadPct, Policy, ExpName) ->
+scale_clients(NumServers, ReadPct, NumReads, Policy, ExpName) ->
    Results = pmap(
       fun(NumClients) ->
-            run_exp({RunTime, NumServers, NumClients, ReadPct, Policy})
+            run_exp({NumServers, NumClients, ReadPct, NumReads, Policy})
       end,
       lists:seq(10,100,10)
    ),
    write_results(Results, ExpName).
 
-scale_clients(RunTime, NumServers, ReadPct, Policy, ExpName, NumRuns) ->
+scale_clients(NumServers, ReadPct, NumReads, Policy, ExpName, NumRuns) ->
    Results = multi_run_exp(
-      [{RunTime, NumServers, C, ReadPct, Policy} || C <- lists:seq(10,100,10)],
+      [{NumServers, C, ReadPct, NumReads, Policy} || C <- lists:seq(10,100,10)],
       NumRuns
    ),
    write_results(Results, ExpName ++ "_" ++ integer_to_list(NumRuns)).
@@ -75,19 +75,19 @@ multi_run_exp(Confs, NumRuns) ->
       lists:flatten( lists:duplicate(NumRuns, Confs) )
    ).
 
-run_exp(Conf = {RunTime, NumServers, NumClients, ReadPct, Policy}) ->
+run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
    %io:format("Running for ~p seconds, with ~p servers, ~p clients. Gets: ~p%\n", [RunTime, NumServers, NumClients, ReadPct]),
    Oracle = oracle:start(),
    [ Oracle ! {start_server, node()} || _I <- lists:seq(1,NumServers) ],
    {_, Clients} = lists:foldl(
       fun(_, {Rand, Clients}) ->
             {_, NextRand} = random:uniform_s(Rand),
-            {NextRand, [client:new(Oracle, Policy, NextRand, ReadPct) | Clients]}
+            {NextRand, [client:new(Oracle, Policy, NextRand, ReadPct, NumReads) | Clients]}
       end,
       {?SEED, []},
       lists:seq(1, NumClients)
    ),
-   timer:sleep(RunTime * ?SECOND),
+   %timer:sleep(MinRunTime * ?SECOND),
    RawResults = pmap(
       fun(C) ->
             C ! {self(), stop_and_report},
@@ -143,14 +143,14 @@ run_exp(Conf = {RunTime, NumServers, NumClients, ReadPct, Policy}) ->
 write_results(Results, ExpName) ->
    Fname = "results/" ++ ExpName ++ ".csv",
    {ok, File} = file:open(Fname, [raw, binary, write]),
-   ok = file:write(File, <<"Servers, Clients, ReadPct, Policy, Window, ">>),
+   ok = file:write(File, <<"Servers, Clients, ReadPct, NumReads, Policy, ">>),
 %   ok = file:write(File, <<"NumPuts, NumGets, ">>),
    ok = file:write(File, <<"AvgStale, SDevStale, ">>),
    ok = file:write(File, <<"AvgInconsistent, SDevInconsistent\n">>),
 %   ok = file:write(File, <<"Min, Mean, Median, 95th, 99th, Max">>),
 
    lists:foreach(
-      fun( {{RunTime, NumServers, NumClients, ReadPct, Policy},
+      fun( {{NumServers, NumClients, ReadPct, NumReads, Policy},
             {
 %              NumPuts, NumGets,
               AvgStale, SDevStale,
@@ -162,8 +162,8 @@ write_results(Results, ExpName) ->
                      NumServers,
                      NumClients,
                      ReadPct,
-                     Policy,
-                     RunTime
+                     NumReads,
+                     Policy
                   ])),
 
 %            ok = file:write(File, io_lib:format("~w, ~w, ", [

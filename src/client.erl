@@ -1,6 +1,6 @@
 -module(client).
 -export([
-      new/4
+      new/5
    ]).
 
 -include("pileus.hrl").
@@ -12,10 +12,15 @@
                      }).
 
 -record(state, {
+                  rand,
                   oracle,
                   can_run,
                   policy,
                   read_percentage,
+                  op_counter,
+
+                  report_to,
+                  reads_remaining,
 
                   key_versions,
                   op_stats,
@@ -31,21 +36,25 @@
 
 %% Tracks latencies up to 5 secs w/ 250 us resolution
 %-define(NEW_HIST, basho_stats_histogram:new(0, 5000000, 20000)).
--define(NEW_HIST, []).
+%-define(NEW_HIST, []).
+-define(NEW_HIST, 0).
 
 
-new(Oracle, Policy, Seed, ReadPct) ->
-   Client = spawn(fun() -> init(Oracle, Policy, Seed, ReadPct) end),
+new(Oracle, Policy, Seed, ReadPct, NumReads) ->
+   Client = spawn(fun() -> init(Oracle, Policy, Seed, ReadPct, NumReads) end),
    Oracle ! {reg_client, Client},
    Client.
 
-init(Oracle, Policy, Seed, ReadPct) ->
-   random:seed(Seed),
+init(Oracle, Policy, Seed, ReadPct, NumReads) ->
+   {OpCounter, Rand} = random:uniform_s(100, Seed),
    State = #state{
+      rand = Rand,
       oracle = Oracle,
       can_run = infinity,
       policy = Policy,
       read_percentage = ReadPct,
+      op_counter = OpCounter,
+      reads_remaining = NumReads,
       key_versions = ets:new(key_versions, []),
       server_stats = [],
       op_stats = {0,0},
@@ -53,20 +62,20 @@ init(Oracle, Policy, Seed, ReadPct) ->
       highest_read_version = 0,
       last_write_version = 0
    },
-   timer:send_interval(?UPDATE_SERVER_STATS_PERIOD, self(), update_server_stats),
+%   timer:send_interval(?UPDATE_SERVER_STATS_PERIOD, self(), update_server_stats),
    loop(self(), State).
 
 
 report(Manager, {Stale, Inconsistent}, PutLatencies, GetLatencies, ReadPct) ->
-   SI = case length(GetLatencies) of
+   SI = case GetLatencies of
       0 -> {0, 0};
       NumGets ->
-         Sp = Stale / NumGets,
-         Ip = Inconsistent / NumGets,
-         io:format("Stale: ~.5f Inconsistent: ~.5f with ~w Gets at ~w%\n", [Sp, Ip, NumGets, ReadPct]),
+%         Sp = Stale / NumGets,
+%         Ip = Inconsistent / NumGets,
+%         io:format("Stale: ~.5f Inconsistent: ~.5f with ~w Gets at ~w%\n", [Sp, Ip, NumGets, ReadPct]),
          {Stale / NumGets, Inconsistent / NumGets}
    end,
-   Manager ! {SI, GetLatencies, PutLatencies},
+   Manager ! {SI, [GetLatencies], [PutLatencies]},
    exit(stop_and_report).
 %
 %         [Gets, Puts] = lists:map(
@@ -90,9 +99,14 @@ report(Manager, {Stale, Inconsistent}, PutLatencies, GetLatencies, ReadPct) ->
 
 
 loop(Self, State = #state{
+      rand = Rand,
       oracle = Oracle,
       can_run = CanRun,
-      policy = Policy, read_percentage = ReadPct,
+      policy = Policy,
+      read_percentage = ReadPct,
+      op_counter = OpCounter,
+      report_to = ReportTo,
+      reads_remaining = ReadsRemaining,
       key_versions = KeysVersions,
       op_stats = OpStats = {Stale, Inconsistent},
       op_latency = {PutLatencies, GetLatencies},
@@ -102,11 +116,20 @@ loop(Self, State = #state{
       last_write_version = LastWriteVersion
    }) ->
 
+   case ReportTo of
+      undefined ->
+         do_nothing;
+      _ when ReadsRemaining > 0 ->
+         do_nothing;
+      ManagerPid ->
+         report(ManagerPid, OpStats, PutLatencies, GetLatencies, ReadPct)
+   end,
+
    receive
       {new_server, Server, Latency} ->
          Server ! {connect_client, Self, Latency},
          NextServerStats = lists:sort(store(Server, #server_stats{latency=Latency}, ServerStats)),
-         NextDefaultTarget = compute_fixed_pref(Oracle, Policy, NextServerStats, HighestReadVersion, LastWriteVersion),
+         NextDefaultTarget = compute_fixed_pref(Rand, Oracle, Policy, NextServerStats, HighestReadVersion, LastWriteVersion),
          loop(Self, State#state{
                can_run = 0,
                server_stats = NextServerStats,
@@ -122,7 +145,7 @@ loop(Self, State = #state{
             ServerStats,
             ServersLatencies
          )),
-         NextDefaultTarget = compute_fixed_pref(Oracle, Policy, NextServerStats, HighestReadVersion, LastWriteVersion),
+         NextDefaultTarget = compute_fixed_pref(Rand, Oracle, Policy, NextServerStats, HighestReadVersion, LastWriteVersion),
          loop(Self, State#state {
                can_run = 0,
                server_stats = NextServerStats,
@@ -130,20 +153,22 @@ loop(Self, State = #state{
             });
 
       {Manager, stop_and_report} ->
-         report(Manager, OpStats, PutLatencies, GetLatencies, ReadPct);
+         loop(Self, State#state{ report_to = Manager });
 
       update_server_stats ->
-         N = random:uniform(length(ServerStats)),
+         {N, NextRand} = random:uniform_s(length(ServerStats), Rand),
          {Server, #server_stats{latency = Latency}} = lists:nth(N, ServerStats),
-         erlang:send_after(Latency, Server, {Self, get_stats}),
-         loop(Self, State);
+         %erlang:send_after(Latency, Server, {Self, get_stats}),
+         Server ! {Self, get_stats},
+         loop(Self, State#state{rand = NextRand});
 
       {server_stats, Server, QDelay, Version} ->
          Stats = fetch(Server, ServerStats),
          NextServerStats = store(Server,
                                  Stats#server_stats{queue_delay = QDelay, version = Version},
                                  ServerStats),
-         NextDefaultTarget = compute_fixed_pref(Oracle,
+         NextDefaultTarget = compute_fixed_pref(Rand,
+                                                Oracle,
                                                 Policy,
                                                 NextServerStats,
                                                 HighestReadVersion,
@@ -154,43 +179,44 @@ loop(Self, State = #state{
             })
 
    after CanRun ->
-         N = random:uniform(100),
-         Key = random:uniform(?MAX_KEY),
+         N = OpCounter,
+         {Key, Rand2} = random:uniform_s(?MAX_KEY, Rand),
 
          Op = if N =< ReadPct -> get; true -> put end,
 
          Oracle ! {Self, pre, Op, Key},
-         {OpTargets, Version} = receive
-            {Manager, stop_and_report} ->
-               report(Manager, OpStats, PutLatencies, GetLatencies, ReadPct);
+         {OpTargets, Version, Rand4} = receive
+%            {Manager, stop_and_report} ->
+%               loop(Self, State#state{ report_to = Manager });
 
             {pre, Op, Key, OracleVersion, SuggestedServer} ->
-               Targets = case Policy of
+               {Targets, Rand3} = case Policy of
                   round_robin ->
-                     #server_stats{latency = L} = fetch(SuggestedServer, ServerStats),
-                     [{SuggestedServer, L}];
+                     { [{SuggestedServer, 0}] , Rand2};
+                     %#server_stats{latency = L} = fetch(SuggestedServer, ServerStats),
+                     %[{SuggestedServer, L}];
 
                   {random, Num} ->
-                     {RandomTargets, _} = lists:foldl(
-                        fun(_, {PickedServers, RemServers}) ->
-                              {S1, [{S,#server_stats{latency = L}} | S2]} = 
-                                    lists:split(random:uniform(length(RemServers)) - 1, RemServers),
-                              { [{S,L} | PickedServers] , S1 ++ S2 }
+                     {RandomTargets, _, Rand3a} = lists:foldl(
+                        fun(_, {PickedServers, RemServers, RandIn}) ->
+                              {X, RandOut} = random:uniform_s(length(RemServers), RandIn),
+                              {S1, [{S,#server_stats{latency = L}} | S2]} = lists:split(X - 1, RemServers),
+                              { [{S,L} | PickedServers] , S1 ++ S2 , RandOut }
                         end,
-                        {[], ServerStats},
+                        {[], ServerStats, Rand2},
                         lists:seq(1, Num)
                      ),
-                     RandomTargets;
+                     {RandomTargets, Rand3a};
 
                   {sla, _} when Op == put ->
                      [{PrimaryServer, #server_stats{latency=L}} | _] = ServerStats,
-                     [{PrimaryServer, L}];
+                     [{PrimaryServer, L}, Rand2];
 
                   _ ->
-                     DefaultTarget
+                     {DefaultTarget, Rand2}
 
                end,
-               {Targets, OracleVersion}
+               {Targets, OracleVersion, Rand3}
          end,
 
          %io:format("@ ~p Op ~p Target ~p\n", [Self, Op, OpTargets]),
@@ -198,15 +224,15 @@ loop(Self, State = #state{
          NextState = case Op of
             get ->
                ExpectedVersion = Version,
-               Ref = make_ref(),
-               Start = now(),
-               [timer:send_after(L, S, {req, {get, {Ref, Self, Key}}}) || {S,L} <- OpTargets],
+%               Start = now(),
+%               [erlang:send_after(L, S, {req, {get, {Self, Key}}}) || {S,L} <- OpTargets],
+               [ S ! {req, {get, {Self, Key}}} || {S,L} <- OpTargets],
                receive
-                  {Manager1, stop_and_report} ->
-                     report(Manager1, OpStats, PutLatencies, GetLatencies, ReadPct);
+%                  {Manager1, stop_and_report} ->
+%                     loop(Self, State#state{ report_to = Manager1 });
 
-                  {get_res, Ref, _Server, Key, GotVersion} ->
-                    OpLatency = timer:now_diff(now(), Start),
+                  {get_res, _Server, Key, GotVersion} ->
+%                    OpLatency = timer:now_diff(now(), Start),
                      NewStale = if
                         GotVersion < ExpectedVersion ->
                            Stale + 1;
@@ -227,32 +253,36 @@ loop(Self, State = #state{
                      end,
 
                      State#state{
+                        rand = Rand4,
+                        op_counter = (OpCounter + 1) rem 100,
+                        reads_remaining = ReadsRemaining - 1,
                         highest_read_version = NewHighestReadVersion,
                         op_stats = {NewStale, NewInconsistent},
                         op_latency = {
                            PutLatencies,
-                           [OpLatency | GetLatencies]
+                           GetLatencies + 1
+%                           [OpLatency | GetLatencies]
                            %basho_stats_histogram:update(OpLatency, GetLatencies)
                         }
                      }
                end;
 
             put ->
-               Ref = make_ref(),
-               Start = now(),
-               [timer:send_after(L, S, {req, {put, {Ref, Self, Key, Version}}}) || {S,L} <- OpTargets],
+%               Start = now(),
+               %[erlang:send_after(L, S, {req, {put, {Self, Key, Version}}}) || {S,L} <- OpTargets],
+               [ S ! {req, {put, {Self, Key, Version}}} || {S,L} <- OpTargets],
                receive
-                  {Manager2, stop_and_report} ->
-                     report(Manager2, OpStats, PutLatencies, GetLatencies, ReadPct);
-
-                  {put_res, Ref, _Server, Key, PutVersion} ->  % Server might actually have newer version
-                     OpLatency = timer:now_diff(now(), Start),
+                  {put_res, _Server, Key, PutVersion} ->  % Server might actually have newer version
+%                     OpLatency = timer:now_diff(now(), Start),
                      ets:insert(KeysVersions, {Key, PutVersion}),
                      State#state{
+                        rand = Rand4,
+                        op_counter = (OpCounter + 1) rem 100,
                         last_write_version = PutVersion,
                         op_latency = {
                            %basho_stats_histogram:update(OpLatency, PutLatencies),
-                           [OpLatency | PutLatencies],
+%                           [OpLatency | PutLatencies],
+                           PutLatencies + 1,
                            GetLatencies
                         }
                      }
@@ -268,14 +298,14 @@ fetch(Key, TupleList) ->
    {Key, Value} = lists:keyfind(Key, 1, TupleList),
    Value.
 
-compute_fixed_pref(Oracle, Policy, ServerStats, HighestReadVersion, LastWriteVersion) ->
+compute_fixed_pref(Rand, Oracle, Policy, ServerStats, HighestReadVersion, LastWriteVersion) ->
    case Policy of
       {fixed, global} ->   % All clients use same server
          {Server, #server_stats{latency=L}} = lists:min(ServerStats),
          [{Server, L}];
 
       {fixed, random} ->   % Each client picks a random server
-         N = random:uniform(length(ServerStats)),
+         {N, _} = random:uniform_s(length(ServerStats), Rand),
          {Server, #server_stats{latency=L}} = lists:nth(N, ServerStats),
          [{Server, L}];
 
