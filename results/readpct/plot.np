@@ -46,6 +46,7 @@ set yrange [0:110]
 plot \
      "round_robin.csv" using 3:6:7 title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:6:7 title "Latency 1" w errorlines ls 2,\
+     "latency2.csv" using 3:6:7 title "Latency 2" w errorlines ls 3,\
      "random1.csv" using 3:6:7 title "Random 1" w errorlines ls 4,\
      "random2.csv" using 3:6:7 title "Random 2" w errorlines ls 5,\
      "fixed_even.csv" using 3:6:7 title "Fixed Even" w errorlines ls 6,\
@@ -59,6 +60,7 @@ set yrange [0:50]
 plot \
      "round_robin.csv" using 3:8:9 title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:8:9 title "Latency 1" w errorlines ls 2,\
+     "latency2.csv" using 3:8:9 title "Latency 2" w errorlines ls 3,\
      "random1.csv" using 3:8:9 title "Random 1" w errorlines ls 4,\
      "random2.csv" using 3:8:9 title "Random 2" w errorlines ls 5,\
      "fixed_even.csv" using 3:8:9 title "Fixed Even" w errorlines ls 6,\
@@ -73,9 +75,11 @@ set yrange [0:*]
 plot \
      "round_robin.csv" using 3:10:11 title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:10:11 title "Latency 1" w errorlines ls 2,\
+     "latency2.csv" using 3:10:11 title "Latency 2" w errorlines ls 3,\
      "random1.csv" using 3:10:11 title "Random 1" w errorlines ls 4,\
      "random2.csv" using 3:10:11 title "Random 2" w errorlines ls 5,\
      "fixed_even.csv" using 3:10:11 title "Fixed Even" w errorlines ls 6,\
      "fixed_random.csv" using 3:10:11 title "Fixed Random" w errorlines ls 7,\
      "min_delay.csv" using 3:10:11 title "Min Delay" w errorlines ls 8,\
      "sla.csv" using 3:10:11 title "SLA" w errorlines ls 9
+
