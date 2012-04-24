@@ -93,15 +93,6 @@ loop(Self, State = #state{ master_table = MasterTable,
          spawn(?MODULE, handle_request, [MasterTable, Self, Store, Latency, Request]),
          loop(Self, State);
 
-      {done_put, Version} = Msg ->
-         NextVersions = case dict:fetch(Self, Versions) of
-            HighestVersion when HighestVersion < Version ->
-               dict:store(Self, Version, Versions);
-            _ -> Versions
-         end,
-         State#state.oracle ! Msg,
-         loop(Self, State#state{ versions = NextVersions });
-
       do_gossip ->
          case length(Servers) of
             0 -> loop(Self, State);

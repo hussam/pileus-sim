@@ -1,16 +1,16 @@
 -define(MINUTE, 60).
 -define(SECOND, 1000).
 
--define(PUT_DELAY, 1).
--define(GET_DELAY, 1).
+-define(PUT_DELAY, 10).
+-define(GET_DELAY, 10).
 
 -define(MAX_KEY, 100).
 -define(SEED, {1,2,3}).
 
--define(GOSSIP_PERIOD, 5).
--define(UPDATES_PER_GOSSIP, 1).
+-define(GOSSIP_PERIOD, 100).
+-define(UPDATES_PER_GOSSIP, 100).
 
--define(UPDATE_SERVER_STATS_PERIOD, 50).
+-define(UPDATE_SERVER_STATS_PERIOD, 100).
 
--define(MIN_LATENCY, 2).
--define(VAR_LATENCY, 1).
+-define(MIN_LATENCY, 20).
+-define(VAR_LATENCY, 10).

@@ -65,22 +65,6 @@ loop(State = #state { table = Table,
          Client ! {pick_server, lists:nth(I, Servers)},
          loop(State, NumServers, ((I+1) rem NumServers) + 1);
 
-      {Client, pre, get, Key} ->
-         Version = case ets:lookup(Table, Key) of
-            [{Key, V}] -> V;
-            [] -> 0
-         end,
-         Client ! {pre, get, Key, Version, lists:nth(I, Servers)},
-         loop(State, NumServers, ((I+1) rem NumServers) + 1);
-
-      {Client, pre, put, Key} ->
-         Client ! {pre, put, Key, Count + 1, lists:nth(I, Servers)},
-         loop(State#state{count = Count + 1}, NumServers, ((I+1) rem NumServers) + 1);
-
-      {done_put, Key, Version} ->
-         ets:insert(Table, {Key, Version}),
-         loop(State, NumServers, I);
-
       {Client, ping} ->
          Client ! {self(), pong},
          loop(State, NumServers, I);
