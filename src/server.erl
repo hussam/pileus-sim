@@ -1,13 +1,13 @@
 -module(server).
 -export([
-      new/1,
-      reg_new/1,
-      handle_request/4
+      new/2,
+      handle_request/5
    ]).
 
 -include("pileus.hrl").
 
 -record(state, {
+                  master_table,
                   store,
                   versions,
                   servers,
@@ -16,20 +16,13 @@
                   oracle
                }).
 
-reg_new(OracleNode) ->
-   {oracle, OracleNode} ! {self(), ping},
-   receive
-      {OraclePid, pong} ->
-         NewServer = new(OraclePid),
-         OraclePid ! {reg_server, NewServer}
-   end.
+new(Oracle, MasterTable) ->
+   spawn(fun() -> init(Oracle, MasterTable) end).
 
-new(Oracle) ->
-   spawn(fun() -> init(Oracle) end).
-
-init(Oracle) ->
+init(Oracle, MasterTable) ->
    Self = self(),
    State = #state {
+      master_table = MasterTable,
       store = ets:new(server_store, [ public, {write_concurrency, true}, {read_concurrency, true} ]),
       versions = dict:store(Self, 0, dict:new()),
       servers = [],
@@ -37,10 +30,11 @@ init(Oracle) ->
       rand = ?SEED,
       oracle = Oracle
    },
-   %timer:send_interval(?GOSSIP_PERIOD, Self, do_gossip),
+   timer:send_interval(?GOSSIP_PERIOD, Self, do_gossip),
    loop(Self, State).
 
-loop(Self, State = #state{ store = Store,
+loop(Self, State = #state{ master_table = MasterTable,
+                           store = Store,
                            versions = Versions,
                            servers = Servers,
                            latencies = NetLatencies,
@@ -85,9 +79,8 @@ loop(Self, State = #state{ store = Store,
          loop(Self, State#state{latencies = NewLatencies});
 
       {Client, get_stats} ->
-         %Latency = dict:fetch(Client, NetLatencies),
-         %erlang:send_after(Latency, Client, {
-         erlang:send(Client, {
+         Latency = dict:fetch(Client, NetLatencies),
+         erlang:send_after(Latency, Client, {
                server_stats,
                Self,
                0, %QueueDelay,
@@ -97,7 +90,7 @@ loop(Self, State = #state{ store = Store,
 
       {req, Request} ->
          Latency = 0, %dict:fetch(Client, NetLatencies),
-         spawn(?MODULE, handle_request, [Self, Store, Latency, Request]),
+         spawn(?MODULE, handle_request, [MasterTable, Self, Store, Latency, Request]),
          loop(Self, State);
 
       {done_put, Version} = Msg ->
@@ -127,12 +120,11 @@ loop(Self, State = #state{ store = Store,
       {gossip_digest, Peer, PeerVersion, LocalVersionAtPeer} ->
          LocalVersion = dict:fetch(Self, Versions),
          LocalPeerVersion = dict:fetch(Peer, Versions),
-         %Latency = dict:fetch(Peer, NetLatencies),
+         Latency = dict:fetch(Peer, NetLatencies),
 
          if    % peer has new updates
             PeerVersion > LocalPeerVersion ->
-               %erlang:send_after(Latency, Peer,
-               erlang:send(Peer,
+               erlang:send_after(Latency, Peer,
                   {gossip_digest, Self, LocalVersion, LocalPeerVersion});
             true -> do_nothing
          end,
@@ -142,8 +134,7 @@ loop(Self, State = #state{ store = Store,
                Updates = ets:select(Store,
                   [{{'$1','$2'},[{'>','$2', LocalVersionAtPeer}],[{{'$1','$2'}}]}]),
                UpdatesToGossip = lists:sublist(lists:keysort(2, Updates), ?UPDATES_PER_GOSSIP),
-               %erlang:send_after(Latency, Peer, {gossip_reply, Self, UpdatesToGossip});
-               erlang:send(Peer, {gossip_reply, Self, UpdatesToGossip});
+               erlang:send_after(Latency, Peer, {gossip_reply, Self, UpdatesToGossip});
 
             true -> do_nothing
          end,
@@ -178,21 +169,26 @@ loop(Self, State = #state{ store = Store,
    end.
 
 
-handle_request(Server, Store, _ClientLatency, {get, {Client, Key}}) ->
-   %timer:sleep(?GET_DELAY),
-   Version = case ets:lookup(Store, Key) of
-      [{Key,V}] -> V;
-      [] -> 0
+handle_request(MasterTable, Server, Store, ClientLatency, {get, {Client, Key}}) ->
+   timer:sleep(?GET_DELAY),
+   MasterNumUpdates = case ets:lookup(MasterTable, Key) of
+      [] -> 0;
+      MasterUpdates -> length(MasterUpdates)
    end,
-   %erlang:send_after(ClientLatency, Client, {get_res, Key, Version}),
-   erlang:send(Client, {get_res, Server, Key, Version});
+   {NumUpdates, Version} = case ets:lookup(Store, Key) of
+      [] -> {0, 0};
+      Updates ->
+         {Key, V} = lists:last(Updates),
+         {length(Updates), V}
+   end,
+   NumMissingUpdates = MasterNumUpdates - NumUpdates,
+   erlang:send_after(ClientLatency, Client, {get_res, Server, Key, Version, NumMissingUpdates});
 
-handle_request(Server, Store, _ClientLatency, {put, {Client, Key, Version}}) ->
-   %timer:sleep(?PUT_DELAY),
+handle_request(MasterTable, Server, Store, ClientLatency, {put, {Client, Key, Version}}) ->
+   timer:sleep(?PUT_DELAY),
+   ets:insert(MasterTable, {Key, Version}),
    ets:insert(Store, {Key, Version}),
-   %erlang:send_after(ClientLatency, Client, {put_res, ServerLoop, Key, PutVersion}),
-   erlang:send(Client, {put_res, Server, Key, Version}),
-   Server ! {done_put, Version}.
+   erlang:send_after(ClientLatency, Client, {put_res, Server, Key, Version}).
 
 
 

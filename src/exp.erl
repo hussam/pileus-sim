@@ -7,6 +7,14 @@
 -include("pileus.hrl").
 
 -define(NUM_COLUMNS, 12).
+-define(STATS_NAMES, [
+      "Stale",
+      "Inconsistent",
+      "StaleCounts",
+      "Gets",
+      "Puts"
+   ]).
+
 
 
 readpct(NumServers, NumClients, NumReads, Policy, ExpName) ->
@@ -14,7 +22,7 @@ readpct(NumServers, NumClients, NumReads, Policy, ExpName) ->
       fun(ReadPct) ->
             run_exp({NumServers, NumClients, ReadPct, NumReads, Policy})
       end,
-      [5]% lists:seq(5, 100, 5)
+      lists:seq(5, 100, 5)
    ),
    write_results(Results, ExpName).
 
@@ -76,9 +84,9 @@ multi_run_exp(Confs, NumRuns) ->
    ).
 
 run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
-   %io:format("Running for ~p seconds, with ~p servers, ~p clients. Gets: ~p%\n", [RunTime, NumServers, NumClients, ReadPct]),
    Oracle = oracle:start(),
-   [ Oracle ! {start_server, node()} || _I <- lists:seq(1,NumServers) ],
+   MasterTable = ets:new(master_table, [ bag, public, {write_concurrency, true}, {read_concurrency, true} ]),
+   [ Oracle ! {start_server, MasterTable} || _I <- lists:seq(1,NumServers) ],
    {_, Clients} = lists:foldl(
       fun(_, {Rand, Clients}) ->
             {_, NextRand} = random:uniform_s(Rand),
@@ -87,9 +95,11 @@ run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
       {?SEED, []},
       lists:seq(1, NumClients)
    ),
-   %timer:sleep(MinRunTime * ?SECOND),
    RawResults = pmap(
       fun(C) ->
+            C ! {self(), stop_and_report},
+            C ! {self(), stop_and_report},
+            C ! {self(), stop_and_report},
             C ! {self(), stop_and_report},
             receive Stats -> Stats end
       end,
@@ -100,65 +110,50 @@ run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
       oracle_stopped -> ok
    end,
 
-   {Stale, Inconsistent, GetLatencies, PutLatencies} = lists:foldl(
-      fun({{S, I}, G, P}, {Ss, Is, Gs, Ps}) ->
-            {[S | Ss], [I | Is], G ++ Gs, P ++ Ps}
+   ets:delete(MasterTable),
+
+      AllStats = lists:map(
+      fun(Values) ->
+            Stats = basho_stats_sample:update_all(Values, basho_stats_sample:new()),
+            {basho_stats_sample:mean(Stats) , basho_stats_sample:sdev(Stats)}
       end,
-      {[], [], [], []},
-      RawResults
+
+      lists:foldl(
+         fun(ClientResults, ClientsAcc) ->
+               lists:map(
+                  fun
+                     ({CR, CA}) when is_list(CR) -> CR ++ CA;
+                     ({CR, CA}) -> [CR | CA]
+                  end,
+
+                  lists:zip(ClientResults, ClientsAcc)
+               )
+         end,
+         lists:duplicate(length(?STATS_NAMES), []),
+         RawResults
+      )
    ),
 
-   StaleStats =        basho_stats_sample:update_all(Stale,        basho_stats_sample:new()),
-   InconsistentStats = basho_stats_sample:update_all(Inconsistent, basho_stats_sample:new()),
-%   GetStats = basho_stats_histogram:update_all(GetLatencies, basho_stats_histogram:new(0, 5000000, 20000)),
-%   PutStats = basho_stats_histogram:update_all(PutLatencies, basho_stats_histogram:new(0, 5000000, 20000)),
-%   AllOpStats = basho_stats_histogram:update_all(PutLatencies, GetStats),
-%
-%   {AllOpMin, AllOpMean, AllOpMax, _, _} = basho_stats_histogram:summary_stats(AllOpStats),
-%
-%   TotalStale = lists:sum(Stale),
-%   TotalInconsistent = lists:sum(Inconsistent),
-
-   { Conf,
-      {
-%         basho_stats_histogram:observations(PutStats),
-%         basho_stats_histogram:observations(GetStats),
-
-         basho_stats_sample:mean(StaleStats),
-         basho_stats_sample:sdev(StaleStats),
-
-         basho_stats_sample:mean(InconsistentStats),
-         basho_stats_sample:sdev(InconsistentStats)
-
-%         AllOpMin,
-%         AllOpMean,
-%         basho_stats_histogram:quantile(0.50, AllOpStats),
-%         basho_stats_histogram:quantile(0.95, AllOpStats),
-%         basho_stats_histogram:quantile(0.99, AllOpStats),
-%         AllOpMax
-      }
-   }.
+   {Conf, AllStats}.
 
 
 write_results(Results, ExpName) ->
    Fname = "results/" ++ ExpName ++ ".csv",
    {ok, File} = file:open(Fname, [raw, binary, write]),
-   ok = file:write(File, <<"Servers, Clients, ReadPct, NumReads, Policy, ">>),
-%   ok = file:write(File, <<"NumPuts, NumGets, ">>),
-   ok = file:write(File, <<"AvgStale, SDevStale, ">>),
-   ok = file:write(File, <<"AvgInconsistent, SDevInconsistent\n">>),
-%   ok = file:write(File, <<"Min, Mean, Median, 95th, 99th, Max">>),
+   ok = file:write(File, <<"Servers, Clients, ReadPct, NumReads, Policy">>),
 
    lists:foreach(
-      fun( {{NumServers, NumClients, ReadPct, NumReads, Policy},
-            {
-%              NumPuts, NumGets,
-              AvgStale, SDevStale,
-              AvgInconsistent, SDevInconsistent
-%              Min, Mean, Median, _95th, _99th, Max
-           }} ) ->
+      fun(StatsName) ->
+            file:write(File, io_lib:format(", Avg~s, SDev~s", [StatsName, StatsName]))
+      end,
+      ?STATS_NAMES
+   ),
 
-            ok = file:write(File, io_lib:format("~w, ~w, ~w, ~w, ~w, ", [
+   ok = file:write(File, <<"\n">>),
+
+   lists:foreach(
+      fun( {{NumServers, NumClients, ReadPct, NumReads, Policy}, RunResults} ) ->
+            ok = file:write(File, io_lib:format("~w, ~w, ~w, ~w, ~w", [
                      NumServers,
                      NumClients,
                      ReadPct,
@@ -166,30 +161,17 @@ write_results(Results, ExpName) ->
                      Policy
                   ])),
 
-%            ok = file:write(File, io_lib:format("~w, ~w, ", [
-%                     NumPuts,
-%                     NumGets
-%                  ])),
+            lists:foreach(
+               fun
+                  ({'NaN', 'NaN'}) ->
+                     ok = file:write(File, <<", NaN, NaN">>);
+                  ({Avg, SDev}) ->
+                     ok = file:write(File, io_lib:format(", ~.5f, ~.5f", [Avg, SDev]))
+               end,
+               RunResults
+            ),
 
-            ok = file:write(File, io_lib:format("~w, ~w, ", [
-                     AvgStale,
-                     SDevStale
-                  ])),
-
-            ok = file:write(File, io_lib:format("~w, ~w\n", [
-                     AvgInconsistent,
-                     SDevInconsistent
-                  ])),
-            ok
-
-%            ok = file:write(File, io_lib:format("~w, ~.2f, ~.2f, ~.2f, ~.2f, ~w\n", [
-%                     Min,
-%                     Mean,
-%                     Median,
-%                     _95th,
-%                     _99th,
-%                     Max
-%                  ]))
+            ok = file:write(File, <<"\n">>)
       end,
       lists:sort(Results)
    ),

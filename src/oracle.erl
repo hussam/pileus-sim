@@ -34,6 +34,10 @@ loop(State = #state { table = Table,
                       count = Count
                    }, NumServers, I ) ->
    receive
+      {Client, get_counter} ->
+         Client ! Count,
+         loop(State#state{count = Count+1}, NumServers, I);
+
       {reg_server, NewServer} ->
          io:format("Registered new server ~p\n", [NewServer]),
          Rand2 = notify_of_existing_servers(NewServer, Servers, Rand),
@@ -41,8 +45,8 @@ loop(State = #state { table = Table,
          NextRand = notify_of_new_server(NewServer, Servers, Rand3),
          loop(State#state{servers = [NewServer | Servers], rand=NextRand}, NumServers + 1, I);
 
-      {start_server, _Node} ->
-         NewServer = server:new(self()), %rpc:call(_Node, server, new, [self()]),
+      {start_server, MasterTable} ->
+         NewServer = server:new(self(), MasterTable), %rpc:call(_Node, server, new, [self()]),
          %io:format("Created new server ~p\n", [NewServer]),
          Rand2 = notify_of_existing_servers(NewServer, Servers, Rand),
          Rand3 = notify_of_new_server(NewServer, Clients, Rand2),
