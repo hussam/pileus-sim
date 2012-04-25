@@ -56,7 +56,7 @@ plot \
 
 set output "inconsistency_vs_read_pct.pdf"
 set ylabel "Inconsistent Reads %"
-set yrange [0:50]
+set yrange [0:30]
 plot \
      "round_robin.csv" using 3:8:9 title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:8:9 title "Latency 1" w errorlines ls 2,\

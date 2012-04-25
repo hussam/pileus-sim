@@ -7,10 +7,10 @@
 -define(MAX_KEY, 100).
 -define(SEED, {1,2,3}).
 
--define(GOSSIP_PERIOD, 100).
+-define(GOSSIP_PERIOD, 10).
 -define(UPDATES_PER_GOSSIP, 100).
 
 -define(UPDATE_SERVER_STATS_PERIOD, 100).
 
--define(MIN_LATENCY, 20).
--define(VAR_LATENCY, 10).
+-define(MIN_LATENCY, 50).
+-define(VAR_LATENCY, 20).

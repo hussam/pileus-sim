@@ -6,7 +6,6 @@
 -include("pileus.hrl").
 
 -record(state, {
-                  table,
                   servers,
                   clients,
                   rand,
@@ -18,7 +17,6 @@ start() ->
 
 init() ->
    State = #state {
-      table = ets:new(oracle_store, []),
       servers = [],
       clients = [],
       rand = ?SEED,
@@ -27,7 +25,7 @@ init() ->
 
    loop(State, 0, 1).
 
-loop(State = #state { table = Table,
+loop(State = #state {
                       servers = Servers,
                       clients = Clients,
                       rand = Rand,

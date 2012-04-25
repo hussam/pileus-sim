@@ -23,7 +23,7 @@ init(Oracle, MasterTable) ->
    Self = self(),
    State = #state {
       master_table = MasterTable,
-      store = ets:new(server_store, [ public, {write_concurrency, true}, {read_concurrency, true} ]),
+      store = ets:new(server_store, [ public, bag, {write_concurrency, true}, {read_concurrency, true} ]),
       versions = dict:store(Self, 0, dict:new()),
       servers = [],
       latencies = dict:new(),
@@ -169,7 +169,7 @@ handle_request(MasterTable, Server, Store, ClientLatency, {get, {Client, Key}}) 
    {NumUpdates, Version} = case ets:lookup(Store, Key) of
       [] -> {0, 0};
       Updates ->
-         {Key, V} = lists:last(Updates),
+         {Key, V} = lists:max(Updates),
          {length(Updates), V}
    end,
    NumMissingUpdates = MasterNumUpdates - NumUpdates,
