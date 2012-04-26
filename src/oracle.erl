@@ -33,7 +33,7 @@ loop(State = #state {
                    }, NumServers, I ) ->
    receive
       {Client, get_counter} ->
-         Client ! Count,
+         Client ! {counter, Count},
          loop(State#state{count = Count+1}, NumServers, I);
 
       {reg_server, NewServer} ->

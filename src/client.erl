@@ -187,7 +187,7 @@ loop(Self, State = #state{
          NextState = case Op of
             get ->
                Start = now(),
-               [erlang:send_after(L, S, {req, {get, {Self, Key}}}) || {S,L} <- OpTargets],
+               [erlang:send_after(L, S, {req, Self, {get, Key}}) || {S,L} <- OpTargets],
                receive
                   {get_res, _Server, Key, GotVersion, StaleCount} ->
                      OpLatency = timer:now_diff(now(), Start),
@@ -218,14 +218,15 @@ loop(Self, State = #state{
 
             put ->
                Oracle ! {Self, get_counter},
-               Version = receive V -> V end,
+               Version = receive {counter, C} -> C end,
+               Pair = {Key, Version},
 
                Start = now(),
-               [erlang:send_after(L, S, {req, {put, {Self, Key, Version}}}) || {S,L} <- OpTargets],
+               [erlang:send_after(L, S, {req, Self, {put, Pair}}) || {S,L} <- OpTargets],
                receive
-                  {put_res, _Server, Key, Version} ->
+                  {put_res, _Server, Pair} ->
                      OpLatency = timer:now_diff(now(), Start),
-                     ets:insert(KeysVersions, {Key, Version}),
+                     ets:insert(KeysVersions, Pair),
                      State#state{
                         rand = Rand4,
                         op_counter = (OpCounter + 1) rem 100,
