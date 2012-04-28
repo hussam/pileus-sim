@@ -178,7 +178,7 @@ loop(Self, State = #state{
 
             {sla, _} when Op == put ->
                [{PrimaryServer, #server_stats{latency=L}} | _] = ServerStats,
-               [{PrimaryServer, L}, Rand2];
+               {[{PrimaryServer, L}], Rand2};
 
             _ ->
                {DefaultTarget, Rand2}
@@ -311,10 +311,10 @@ compute_fixed_pref(Rand, Oracle, Policy, ServerStats, HighestReadVersion, LastWr
                   fun({_S1, V1, _T1, L1}, {_S2, V2, _T2, L2}) ->
                         % Sort descending by version first, break ties by latency ascending
                         if
-                           V1 > V2 -> true;
-                           V1 < V2 -> false;
-                           L1 > L2 -> false;
-                           true -> true
+                           V1 < V2 -> true;
+                           V1 > V2 -> false;
+                           L1 < L2 -> true;
+                           true -> false
                         end
                   end,
                   SortedServers
