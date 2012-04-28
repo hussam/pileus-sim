@@ -4,6 +4,8 @@
 -define(PUT_DELAY, 10).
 -define(GET_DELAY, 10).
 
+-define(NUM_WORKERS, 4).
+
 -define(MAX_KEY, 100).
 -define(SEED, {1,2,3}).
 

@@ -1,15 +1,16 @@
 -module(server).
 -export([
-      new/2,
-      handle_request/6
+      new/2
    ]).
 
 -include("pileus.hrl").
 
 -record(state, {
-                  master_table,
                   store,
                   highest_version,
+                  queue,
+                  queue_length,
+                  workers,
                   client_latencies,
                   gossip_proc,
                   oracle
@@ -20,21 +21,29 @@ new(Oracle, MasterTable) ->
 
 init(Oracle, MasterTable) ->
    Self = self(),
+   Store = ets:new(server_store, [ public, bag, {write_concurrency, true}, {read_concurrency, true} ]),
+   Workers = [spawn(fun() -> worker_proc(MasterTable, Self, Store) end) || _I <- lists:seq(1, ?NUM_WORKERS)],
    GossipProc = spawn(fun gossip_proc/0),
+   timer:send_interval(?GOSSIP_PERIOD, GossipProc, push_updates),
+
    State = #state {
-      master_table = MasterTable,
-      store = ets:new(server_store, [ public, bag, {write_concurrency, true}, {read_concurrency, true} ]),
+      store = Store,
       highest_version = 0,
+      queue = queue:new(),
+      queue_length = 0,
+      workers = Workers,
       client_latencies = dict:new(),
       gossip_proc = GossipProc,
       oracle = Oracle
    },
-   timer:send_interval(?GOSSIP_PERIOD, GossipProc, push_updates),
    loop(Self, State).
 
-loop(Self, State = #state{ master_table = MasterTable,
+loop(Self, State = #state{
                            store = Store,
                            highest_version = HighestVersion,
+                           queue = Queue,
+                           queue_length = QLen,
+                           workers = Workers,
                            client_latencies = ClientLatencies,
                            gossip_proc = GossipProc
                         } ) ->
@@ -59,15 +68,34 @@ loop(Self, State = #state{ master_table = MasterTable,
          erlang:send_after(Latency, Client, {
                server_stats,
                Self,
-               0, %QueueDelay,
+               QLen * ?GET_DELAY,
                HighestVersion
             }),
          loop(Self, State);
 
       {req, Client, Request} ->
          Latency = dict:fetch(Client, ClientLatencies),
-         spawn(?MODULE, handle_request, [MasterTable, Self, Store, Client, Latency, Request]),
-         loop(Self, State);
+         case Workers of
+            [] ->
+               loop(Self, State#state{
+                     queue = queue:in({Client, Latency, Request}, Queue),
+                     queue_length = QLen + 1
+                  });
+            [Worker | Tail] ->
+               Worker ! {Client, Latency, Request},
+               loop(Self, State#state{ workers = Tail })
+         end;
+
+      {done, Worker} ->
+         if
+            QLen > 0 ->
+               {{value, WorkReq}, NextQueue} = queue:out(Queue),
+               Worker ! WorkReq,
+               loop(Self, State#state{queue = NextQueue, queue_length = QLen - 1});
+
+            true ->
+               loop(Self, State#state{workers = [Worker | Workers]})
+         end;
 
       {done_put, Pair = {_Key, Version}} ->
          GossipProc ! {put, Pair},
@@ -89,28 +117,36 @@ loop(Self, State = #state{ master_table = MasterTable,
    end.
 
 
+worker_proc(MasterTable, Server, Store) ->
+   worker_proc(self(), MasterTable, Server, Store).
 
-handle_request(MasterTable, Server, Store, Client, Latency, {get, Key}) ->
-   timer:sleep(?GET_DELAY),
-   MasterNumUpdates = case ets:lookup(MasterTable, Key) of
-      [] -> 0;
-      MasterUpdates -> length(MasterUpdates)
-   end,
-   {NumUpdates, Version} = case ets:lookup(Store, Key) of
-      [] -> {0, 0};
-      Updates ->
-         {Key, V} = lists:max(Updates),
-         {length(Updates), V}
-   end,
-   NumMissingUpdates = MasterNumUpdates - NumUpdates,
-   erlang:send_after(Latency, Client, {get_res, Server, Key, Version, NumMissingUpdates});
+worker_proc(Self, MasterTable, Server, Store) ->
+   receive
+      {Client, Latency, {get, Key}} ->
+         timer:sleep(?GET_DELAY),
+         MasterNumUpdates = case ets:lookup(MasterTable, Key) of
+            [] -> 0;
+            MasterUpdates -> length(MasterUpdates)
+         end,
+         {NumUpdates, Version} = case ets:lookup(Store, Key) of
+            [] -> {0, 0};
+            Updates ->
+               {Key, V} = lists:max(Updates),
+               {length(Updates), V}
+         end,
+         NumMissingUpdates = MasterNumUpdates - NumUpdates,
+         erlang:send_after(Latency, Client, {get_res, Server, Key, Version, NumMissingUpdates}),
+         Server ! {done, Self};
 
-handle_request(MasterTable, Server, Store, Client, Latency, {put, Pair}) ->
-   timer:sleep(?PUT_DELAY),
-   ets:insert(MasterTable, Pair),
-   ets:insert(Store, Pair),
-   Server ! {done_put, Pair},
-   erlang:send_after(Latency, Client, {put_res, Server, Pair}).
+      {Client, Latency, {put, Pair}} ->
+         timer:sleep(?PUT_DELAY),
+         ets:insert(MasterTable, Pair),
+         ets:insert(Store, Pair),
+         Server ! {done_put, Pair},
+         erlang:send_after(Latency, Client, {put_res, Server, Pair}),
+         Server ! {done, Self}
+   end,
+   worker_proc(Self, MasterTable, Server, Store).
 
 
 gossip_proc() ->
