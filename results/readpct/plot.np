@@ -72,7 +72,7 @@ plot \
 
 set output "freshness_vs_read_pct.pdf"
 set ylabel "# lagging updates"
-set yrange [0:*]
+set yrange [0:1000]
 plot \
      "round_robin.csv" using 3:10:11 title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:10:11 title "Latency 1" w errorlines ls 2,\
@@ -88,7 +88,7 @@ plot \
 
 set output "get_latencies_vs_read_pct.pdf"
 set ylabel "Get Latency (ms)"
-set yrange [0:*]
+set yrange [0:1000]
 plot \
      "round_robin.csv" using 3:($12/1000):($13/1000) title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:($12/1000):($13/1000) title "Latency 1" w errorlines ls 2,\
@@ -104,7 +104,7 @@ plot \
 
 set output "put_latencies_vs_read_pct.pdf"
 set ylabel "Put Latency (ms)"
-set yrange [0:*]
+set yrange [0:1000]
 plot \
      "round_robin.csv" using 3:($14/1000):($15/1000) title "Round Robin" w errorlines ls 1,\
      "latency1.csv" using 3:($14/1000):($15/1000) title "Latency 1" w errorlines ls 2,\
@@ -116,4 +116,36 @@ plot \
      "fixed_random.csv" using 3:($14/1000):($15/1000) title "Fixed Random" w errorlines ls 8,\
      "min_delay.csv" using 3:($14/1000):($15/1000) title "Min Delay" w errorlines ls 9,\
      "sla.csv" using 3:($14/1000):($15/1000) title "SLA" w errorlines ls 10
+
+
+set output "1client_get_latencies_vs_read_pct.pdf"
+set ylabel "Get Latency (ms)"
+set yrange [0:1000]
+plot \
+     "round_robin.csv" using 3:($22/1000):($23/1000) title "Round Robin" w errorlines ls 1,\
+     "latency1.csv" using 3:($22/1000):($23/1000) title "Latency 1" w errorlines ls 2,\
+     "latency2.csv" using 3:($22/1000):($23/1000) title "Latency 2" w errorlines ls 3,\
+     "random1.csv" using 3:($22/1000):($23/1000) title "Random 1" w errorlines ls 4,\
+     "random2.csv" using 3:($22/1000):($23/1000) title "Random 2" w errorlines ls 5,\
+     "fixed_global.csv" using 3:($22/1000):($23/1000) title "Fixed Global" w errorlines ls 6,\
+     "fixed_even.csv" using 3:($22/1000):($23/1000) title "Fixed Even" w errorlines ls 7,\
+     "fixed_random.csv" using 3:($22/1000):($23/1000) title "Fixed Random" w errorlines ls 8,\
+     "min_delay.csv" using 3:($22/1000):($23/1000) title "Min Delay" w errorlines ls 9,\
+     "sla.csv" using 3:($22/1000):($23/1000) title "SLA" w errorlines ls 10
+
+
+set output "1client_put_latencies_vs_read_pct.pdf"
+set ylabel "Put Latency (ms)"
+set yrange [0:1000]
+plot \
+     "round_robin.csv" using 3:($24/1000):($25/1000) title "Round Robin" w errorlines ls 1,\
+     "latency1.csv" using 3:($24/1000):($25/1000) title "Latency 1" w errorlines ls 2,\
+     "latency2.csv" using 3:($24/1000):($25/1000) title "Latency 2" w errorlines ls 3,\
+     "random1.csv" using 3:($24/1000):($25/1000) title "Random 1" w errorlines ls 4,\
+     "random2.csv" using 3:($24/1000):($25/1000) title "Random 2" w errorlines ls 5,\
+     "fixed_global.csv" using 3:($24/1000):($25/1000) title "Fixed Global" w errorlines ls 6,\
+     "fixed_even.csv" using 3:($24/1000):($25/1000) title "Fixed Even" w errorlines ls 7,\
+     "fixed_random.csv" using 3:($24/1000):($25/1000) title "Fixed Random" w errorlines ls 8,\
+     "min_delay.csv" using 3:($24/1000):($25/1000) title "Min Delay" w errorlines ls 9,\
+     "sla.csv" using 3:($24/1000):($25/1000) title "SLA" w errorlines ls 10
 

@@ -112,14 +112,14 @@ run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
 
    ets:delete(MasterTable),
 
-      AllStats = lists:map(
+   AllStats = lists:map(
       fun(Values) ->
             Stats = basho_stats_sample:update_all(Values, basho_stats_sample:new()),
             {basho_stats_sample:mean(Stats) , basho_stats_sample:sdev(Stats)}
       end,
 
       lists:foldl(
-         fun(ClientResults, ClientsAcc) ->
+         fun({_ClientId, ClientResults}, ClientsAcc) ->
                lists:map(
                   fun
                      ({CR, CA}) when is_list(CR) -> CR ++ CA;
@@ -134,7 +134,19 @@ run_exp(Conf = {NumServers, NumClients, ReadPct, NumReads, Policy}) ->
       )
    ),
 
-   {Conf, AllStats}.
+   {1, SingleClientResults} = lists:min(RawResults),
+   SingleClientStats = lists:map(
+      fun
+         (Values) when is_list(Values) ->
+            Stats = basho_stats_sample:update_all(Values, basho_stats_sample:new()),
+            {basho_stats_sample:mean(Stats) , basho_stats_sample:sdev(Stats)};
+         (Value) ->
+            {float(Value), 0.0}
+      end,
+      SingleClientResults
+   ),
+
+   {Conf, AllStats, SingleClientStats}.
 
 
 write_results(Results, ExpName) ->
@@ -142,6 +154,7 @@ write_results(Results, ExpName) ->
    {ok, File} = file:open(Fname, [raw, binary, write]),
    ok = file:write(File, <<"Servers, Clients, ReadPct, NumReads, Policy">>),
 
+   % All clients stats
    lists:foreach(
       fun(StatsName) ->
             file:write(File, io_lib:format(", Avg~s, SDev~s", [StatsName, StatsName]))
@@ -149,10 +162,18 @@ write_results(Results, ExpName) ->
       ?STATS_NAMES
    ),
 
+   % Single clients stats
+   lists:foreach(
+      fun(StatsName) ->
+            file:write(File, io_lib:format(", 1CAvg~s, 1CSDev~s", [StatsName, StatsName]))
+      end,
+      ?STATS_NAMES
+   ),
+
    ok = file:write(File, <<"\n">>),
 
    lists:foreach(
-      fun( {{NumServers, NumClients, ReadPct, NumReads, Policy}, RunResults} ) ->
+      fun( {{NumServers, NumClients, ReadPct, NumReads, Policy}, AllClientsResults, OneClientResults} ) ->
             ok = file:write(File, io_lib:format("~w, ~w, ~w, ~w, ~w", [
                      NumServers,
                      NumClients,
@@ -168,7 +189,17 @@ write_results(Results, ExpName) ->
                   ({Avg, SDev}) ->
                      ok = file:write(File, io_lib:format(", ~.5f, ~.5f", [Avg, SDev]))
                end,
-               RunResults
+               AllClientsResults
+            ),
+
+            lists:foreach(
+               fun
+                  ({'NaN', 'NaN'}) ->
+                     ok = file:write(File, <<", NaN, NaN">>);
+                  ({Avg, SDev}) ->
+                     ok = file:write(File, io_lib:format(", ~.5f, ~.5f", [Avg, SDev]))
+               end,
+               OneClientResults
             ),
 
             ok = file:write(File, <<"\n">>)

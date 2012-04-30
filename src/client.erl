@@ -12,6 +12,7 @@
                      }).
 
 -record(state, {
+                  id,
                   rand,
                   oracle,
                   can_run,
@@ -71,6 +72,7 @@ init(Oracle, Policy, Seed, ReadPct, NumReads) ->
 
 
 loop(Self, State = #state{
+      id = Id,
       rand = Rand,
       oracle = Oracle,
       can_run = CanRun,
@@ -97,11 +99,14 @@ loop(Self, State = #state{
          do_nothing;
       Manager ->
          NumStaleGets = length([X || X <- StaleCounts, X > 0]),
-         Manager ! [NumStaleGets, InconsistentCount, StaleCounts, GetLatencies, PutLatencies],
+         Manager ! {Id, [NumStaleGets, InconsistentCount, StaleCounts, GetLatencies, PutLatencies]},
          exit(stop_and_report)
    end,
 
    receive
+      {client_number, Number} ->
+         loop(Self, State#state{id = Number});
+
       {new_server, Server, Latency} ->
          Server ! {connect_client, Self, Latency},
          NextServerStats = lists:sort(store(Server, #server_stats{latency=Latency}, ServerStats)),

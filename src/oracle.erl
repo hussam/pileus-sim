@@ -53,7 +53,9 @@ loop(State = #state {
 
       {reg_client, NewClient} ->
          NextRand = notify_of_existing_servers(NewClient, Servers, Rand),
-         loop(State#state{clients = [NewClient | Clients], rand=NextRand}, NumServers, I);
+         AllClients = [NewClient | Clients],
+         NewClient ! {client_number, length(AllClients)},
+         loop(State#state{clients = AllClients, rand=NextRand}, NumServers, I);
 
       {Client, get_servers} ->
          NextRand = notify_of_existing_servers(Client, Servers, Rand),
@@ -78,6 +80,7 @@ notify_of_new_server(NewServer, ExistingNodes, Rand) when is_list(ExistingNodes)
       fun(S, Rand1) ->
             {Latency, Rand2} = random:uniform_s(?VAR_LATENCY, Rand1),
             S ! {new_server, NewServer, ?MIN_LATENCY + Latency},
+            %S ! {new_server, NewServer, 0},
             Rand2
       end,
       Rand,
@@ -89,6 +92,7 @@ notify_of_existing_servers(NewNode, ExistingServers, Rand) when is_list(Existing
       fun(S, {SLs, Rand1}) ->
             {Latency, Rand2} = random:uniform_s(?VAR_LATENCY, Rand1),
             { [{S, ?MIN_LATENCY + Latency} | SLs] , Rand2 }
+            %{ [{S, 0} | SLs] , Rand2 }
       end,
       {[], Rand},
       ExistingServers
