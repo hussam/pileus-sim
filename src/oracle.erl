@@ -79,8 +79,8 @@ notify_of_new_server(NewServer, ExistingNodes, Rand) when is_list(ExistingNodes)
    lists:foldl(
       fun(S, Rand1) ->
             {Latency, Rand2} = random:uniform_s(?VAR_LATENCY, Rand1),
-            S ! {new_server, NewServer, ?MIN_LATENCY + Latency},
-            %S ! {new_server, NewServer, 0},
+            %S ! {new_server, NewServer, ?MIN_LATENCY + Latency},
+            S ! {new_server, NewServer, 0},
             Rand2
       end,
       Rand,
@@ -91,8 +91,8 @@ notify_of_existing_servers(NewNode, ExistingServers, Rand) when is_list(Existing
    {ServersLatencies, NextRand} = lists:foldl(
       fun(S, {SLs, Rand1}) ->
             {Latency, Rand2} = random:uniform_s(?VAR_LATENCY, Rand1),
-            { [{S, ?MIN_LATENCY + Latency} | SLs] , Rand2 }
-            %{ [{S, 0} | SLs] , Rand2 }
+            %{ [{S, ?MIN_LATENCY + Latency} | SLs] , Rand2 }
+            { [{S, 0} | SLs] , Rand2 }
       end,
       {[], Rand},
       ExistingServers

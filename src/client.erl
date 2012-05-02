@@ -164,33 +164,29 @@ loop(Self, State = #state{
 
          Op = if N =< ReadPct -> get; true -> put end,
 
-         {OpTargets, Rand4} = case Policy of
-            round_robin ->
-               {Server, #server_stats{latency=L}} = lists:nth( (N rem length(ServerStats)) + 1, ServerStats),
-               { [{Server, L}] , Rand2 };
-
-            {random, Num} ->
-               {RandomTargets, _, Rand3} = lists:foldl(
-                  fun(_, {PickedServers, RemServers, RandIn}) ->
-                        {X, RandOut} = random:uniform_s(length(RemServers), RandIn),
-                        {S1, [{S,#server_stats{latency = L}} | S2]} = lists:split(X - 1, RemServers),
-                        { [{S,L} | PickedServers] , S1 ++ S2 , RandOut }
-                  end,
-                  {[], ServerStats, Rand2},
-                  lists:seq(1, Num)
-               ),
-               {RandomTargets, Rand3};
-
-            {sla, _} when Op == put ->
-               [{PrimaryServer, #server_stats{latency=L}} | _] = ServerStats,
-               {[{PrimaryServer, L}], Rand2};
-
-            _ ->
-               {DefaultTarget, Rand2}
-         end,
-
          NextState = case Op of
             get ->
+               {OpTargets, Rand4} = case Policy of
+                  round_robin ->
+                     {Server, #server_stats{latency=L}} = lists:nth( (N rem length(ServerStats)) + 1, ServerStats),
+                     { [{Server, L}] , Rand2 };
+
+                  {random, Num} ->
+                     {RandomTargets, _, Rand3} = lists:foldl(
+                        fun(_, {PickedServers, RemServers, RandIn}) ->
+                              {X, RandOut} = random:uniform_s(length(RemServers), RandIn),
+                              {S1, [{S,#server_stats{latency = L}} | S2]} = lists:split(X - 1, RemServers),
+                              { [{S,L} | PickedServers] , S1 ++ S2 , RandOut }
+                        end,
+                        {[], ServerStats, Rand2},
+                        lists:seq(1, Num)
+                     ),
+                     {RandomTargets, Rand3};
+
+                  _ ->
+                     {DefaultTarget, Rand2}
+               end,
+
                Start = now(),
                [erlang:send_after(L, S, {req, Self, {get, Key}}) || {S,L} <- OpTargets],
                receive
@@ -222,18 +218,20 @@ loop(Self, State = #state{
                end;
 
             put ->
+               [{PrimaryServer, #server_stats{latency=L}} | _] = ServerStats,
+
                Oracle ! {Self, get_counter},
                Version = receive {counter, C} -> C end,
                Pair = {Key, Version},
 
                Start = now(),
-               [erlang:send_after(L, S, {req, Self, {put, Pair}}) || {S,L} <- OpTargets],
+               erlang:send_after(L, PrimaryServer, {req, Self, {put, Pair}}),
                receive
                   {put_res, _Server, Pair} ->
                      OpLatency = timer:now_diff(now(), Start),
                      ets:insert(KeysVersions, Pair),
                      State#state{
-                        rand = Rand4,
+                        rand = Rand2,
                         op_counter = (OpCounter + 1) rem 100,
                         last_write_version = Version,
                         put_latencies = [OpLatency | PutLatencies]
@@ -316,9 +314,9 @@ compute_fixed_pref(Rand, Oracle, Policy, ServerStats, HighestReadVersion, LastWr
                   fun({_S1, V1, _T1, L1}, {_S2, V2, _T2, L2}) ->
                         % Sort descending by version first, break ties by latency ascending
                         if
-                           V1 < V2 -> true;
-                           V1 > V2 -> false;
-                           L1 < L2 -> true;
+                           V1 > V2 -> true;
+                           V1 < V2 -> false;
+                           L1 > L2 -> true;
                            true -> false
                         end
                   end,

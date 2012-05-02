@@ -20,6 +20,7 @@
 readpct(NumServers, NumClients, NumReads, Policy, ExpName) ->
    Results = pmap(
       fun(ReadPct) ->
+            io:format("~p\n", [ReadPct]),
             run_exp({NumServers, NumClients, ReadPct, NumReads, Policy})
       end,
       lists:seq(5, 100, 5)
